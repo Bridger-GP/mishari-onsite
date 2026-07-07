@@ -10,3 +10,93 @@ datasource db {
 model Greet {
   id Int @id @default(autoincrement())
 }
+
+model Client {
+  id   Int    @id @default(autoincrement())
+  qbId String
+  name String
+
+  transactions Transaction[]
+  accounts     Account[]
+  categories   QbCategory[]
+  payees       QbPayee[]
+
+  @@unique([qbId])
+}
+
+model Account {
+  id       Int    @id @default(autoincrement())
+  qbId     String
+  clientId Int
+  name     String
+
+  client       Client        @relation(fields: [clientId], references: [id])
+  transactions Transaction[]
+
+  @@unique([qbId, clientId])
+}
+
+model Transaction {
+  id              Int      @id @default(autoincrement())
+  amount          Int
+  date            DateTime
+  bankDescription String
+  accountId       Int
+  clientId        Int
+  qbId            String
+
+  account Account            @relation(fields: [accountId], references: [id])
+  client  Client             @relation(fields: [clientId], references: [id])
+  labels  TransactionLabel[]
+
+  @@unique([qbId, clientId])
+}
+
+model TransactionLabel {
+  id               Int     @id @default(autoincrement())
+  payeeId          Int
+  txPaidId         Int?
+  isCorrect        Boolean?
+  incorrectReason  String?
+  correctedLabelId Int?
+
+  payee          QbPayee            @relation(fields: [payeeId], references: [id])
+  txPaid         Transaction?       @relation(fields: [txPaidId], references: [id])
+  categorization CategoryLabel[]
+  correctedLabel TransactionLabel?  @relation("LabelCorrection", fields: [correctedLabelId], references: [id])
+  corrections    TransactionLabel[] @relation("LabelCorrection")
+}
+
+model CategoryLabel {
+  id                 Int @id @default(autoincrement())
+  qbCategoryId       Int
+  transactionLabelId Int
+  amount             Int
+
+  qbCategory       QbCategory       @relation(fields: [qbCategoryId], references: [id])
+  transactionLabel TransactionLabel @relation(fields: [transactionLabelId], references: [id])
+}
+
+model QbCategory {
+  id       Int    @id @default(autoincrement())
+  qbId     String
+  clientId Int
+  name     String
+
+  client         Client          @relation(fields: [clientId], references: [id])
+  categoryLabels CategoryLabel[]
+
+  @@unique([qbId, clientId])
+}
+
+model QbPayee {
+  id       Int     @id @default(autoincrement())
+  qbId     String?
+  clientId Int
+  name     String
+
+  client            Client             @relation(fields: [clientId], references: [id])
+  transactionLabels TransactionLabel[]
+
+  @@unique([qbId, clientId])
+}
