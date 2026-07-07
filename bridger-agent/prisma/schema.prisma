@@ -56,8 +56,7 @@ model TransactionLabel {
   id               Int     @id @default(autoincrement())
   payeeId          Int
   txPaidId         Int?
-  validated        Boolean @default(false)
-  isCorrect        Boolean @default(false)
+  isCorrect        Boolean?
   incorrectReason  String?
   correctedLabelId Int?
 

@@ -32,8 +32,7 @@ CREATE TABLE "TransactionLabel" (
     "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     "payeeId" INTEGER NOT NULL,
     "txPaidId" INTEGER,
-    "validated" BOOLEAN NOT NULL DEFAULT false,
-    "isCorrect" BOOLEAN NOT NULL DEFAULT false,
+    "isCorrect" BOOLEAN,
     "incorrectReason" TEXT,
     "correctedLabelId" INTEGER,
     CONSTRAINT "TransactionLabel_payeeId_fkey" FOREIGN KEY ("payeeId") REFERENCES "QbPayee" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
@@ -68,3 +67,19 @@ CREATE TABLE "QbPayee" (
     "name" TEXT NOT NULL,
     CONSTRAINT "QbPayee_clientId_fkey" FOREIGN KEY ("clientId") REFERENCES "Client" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Client_qbId_key" ON "Client"("qbId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Account_qbId_clientId_key" ON "Account"("qbId", "clientId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Transaction_qbId_clientId_key" ON "Transaction"("qbId", "clientId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "QbCategory_qbId_clientId_key" ON "QbCategory"("qbId", "clientId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "QbPayee_qbId_clientId_key" ON "QbPayee"("qbId", "clientId");
+
