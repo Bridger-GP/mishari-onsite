@@ -63,6 +63,8 @@ const { handleRequest } = createYoga({
         categorization: [CategoryLabel!]!
         txPair: PairedTransaction
         isCorrect: Boolean
+        isCorrection: Boolean!
+        incorrectLabel: TransactionLabel
       }
 
       type PairedTransaction {

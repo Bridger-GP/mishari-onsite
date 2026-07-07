@@ -19,6 +19,7 @@ const TRANSACTIONS_QUERY = gql`
       activeLabel {
         id
         isCorrect
+        isCorrection
         payee {
           id
           name
@@ -36,6 +37,26 @@ const TRANSACTIONS_QUERY = gql`
           bankDescription
           amount
         }
+        incorrectLabel {
+          id
+          payee {
+            id
+            name
+          }
+          categorization {
+            id
+            category {
+              id
+              name
+            }
+            amount
+          }
+          txPair {
+            id
+            bankDescription
+            amount
+          }
+        }
       }
     }
   }
@@ -44,6 +65,7 @@ const TRANSACTIONS_QUERY = gql`
 interface ActiveLabel {
   id: number;
   isCorrect: boolean | null;
+  isCorrection: boolean;
   payee: { id: number; name: string } | null;
   categorization: Array<{
     id: number;
@@ -51,6 +73,16 @@ interface ActiveLabel {
     amount: number;
   }>;
   txPair: { id: number; bankDescription: string; amount: number } | null;
+  incorrectLabel: {
+    id: number;
+    payee: { id: number; name: string } | null;
+    categorization: Array<{
+      id: number;
+      category: { id: number; name: string };
+      amount: number;
+    }>;
+    txPair: { id: number; bankDescription: string; amount: number } | null;
+  } | null;
 }
 
 interface Transaction {
@@ -93,6 +125,13 @@ function StatusBadge({ label }: { label: ActiveLabel | null }) {
     return (
       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
         Approved
+      </span>
+    );
+  }
+  if (label.isCorrection) {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+        Corrected
       </span>
     );
   }
@@ -274,6 +313,17 @@ export function TransactionsTable({ clientId, accountId }: Props) {
                         <span className="text-gray-400">—</span>
                       )
                     )}
+                    {label?.incorrectLabel && (
+                      <div className="mt-1 text-xs text-gray-400 line-through">
+                        {label.incorrectLabel.txPair ? (
+                          <span>
+                            Pair: {label.incorrectLabel.txPair.bankDescription}
+                          </span>
+                        ) : (
+                          label.incorrectLabel.payee?.name ?? "—"
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-700">
                     {label?.txPair ? (
@@ -294,6 +344,21 @@ export function TransactionsTable({ clientId, accountId }: Props) {
                       </div>
                     ) : (
                       <span className="text-gray-400">—</span>
+                    )}
+                    {label?.incorrectLabel && !label.incorrectLabel.txPair && label.incorrectLabel.categorization.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {label.incorrectLabel.categorization.map((c) => (
+                          <span
+                            key={c.id}
+                            className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-50 text-gray-400 line-through"
+                          >
+                            {c.category.name}{" "}
+                            <span className="ml-1">
+                              {formatAmount(c.amount)}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
                     )}
                   </td>
                   <td className="px-4 py-3">

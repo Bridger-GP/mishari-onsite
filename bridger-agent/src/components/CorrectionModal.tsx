@@ -21,16 +21,22 @@ const CATEGORIES_QUERY = gql`
   }
 `;
 
+const ACCOUNTS_FOR_PAIR_QUERY = gql`
+  query AccountsForPair($clientId: Int!) {
+    accounts(clientId: $clientId) {
+      id
+      name
+    }
+  }
+`;
+
 const TRANSACTIONS_FOR_PAIR_QUERY = gql`
-  query TransactionsForPair($clientId: Int!) {
-    transactions(clientId: $clientId) {
+  query TransactionsForPair($clientId: Int!, $accountId: Int) {
+    transactions(clientId: $clientId, accountId: $accountId) {
       id
       bankDescription
       amount
       date
-      account {
-        id
-      }
     }
   }
 `;
@@ -98,6 +104,7 @@ export function CorrectionModal({
   const [categoryRows, setCategoryRows] = useState<CategoryRow[]>([
     { qbCategoryId: null, amount: "" },
   ]);
+  const [pairAccountId, setPairAccountId] = useState<number | null>(null);
   const [txPairId, setTxPairId] = useState<number | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -107,9 +114,13 @@ export function CorrectionModal({
   const { data: categoriesData } = useQuery(CATEGORIES_QUERY, {
     variables: { clientId },
   });
-  const { data: txData } = useQuery(TRANSACTIONS_FOR_PAIR_QUERY, {
+  const { data: accountsData } = useQuery(ACCOUNTS_FOR_PAIR_QUERY, {
     variables: { clientId },
     skip: type !== "pair",
+  });
+  const { data: txData } = useQuery(TRANSACTIONS_FOR_PAIR_QUERY, {
+    variables: { clientId, accountId: pairAccountId },
+    skip: type !== "pair" || !pairAccountId,
   });
 
   const [correctLabelMutation, { loading }] = useMutation(
@@ -120,15 +131,16 @@ export function CorrectionModal({
     payeesData?.payees ?? [];
   const categoriesList: Array<{ id: number; name: string }> =
     categoriesData?.categories ?? [];
+  const pairAccountsList: Array<{ id: number; name: string }> = (
+    accountsData?.accounts ?? []
+  ).filter((a: { id: number }) => a.id !== transactionAccountId);
   const transactionsList: Array<{
     id: number;
     bankDescription: string;
     amount: number;
     date: string;
-    account: { id: number };
   }> = (txData?.transactions ?? []).filter(
-    (t: { id: number; account: { id: number } }) =>
-      t.id !== transactionId && t.account.id !== transactionAccountId
+    (t: { id: number }) => t.id !== transactionId
   );
 
   const validCategories = categoryRows.filter(
@@ -414,32 +426,64 @@ export function CorrectionModal({
               </div>
             </>
           ) : (
-            /* Pair transaction selector */
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Paired Transaction
-              </label>
-              <select
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                value={txPairId ?? ""}
-                onChange={(e) =>
-                  setTxPairId(
-                    e.target.value ? Number(e.target.value) : null
-                  )
-                }
-              >
-                <option value="">Select transaction...</option>
-                {transactionsList.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.bankDescription} — {formatAmount(t.amount)} —{" "}
-                    {new Date(t.date).toLocaleDateString()}
-                  </option>
-                ))}
-              </select>
-              {txData && transactionsList.length === 0 && (
-                <p className="mt-1 text-xs text-gray-500">
-                  No transactions available in other accounts to pair with.
-                </p>
+            /* Pair: account then transaction selector */
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Account
+                </label>
+                <select
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={pairAccountId ?? ""}
+                  onChange={(e) => {
+                    setPairAccountId(
+                      e.target.value ? Number(e.target.value) : null
+                    );
+                    setTxPairId(null);
+                  }}
+                >
+                  <option value="">Select account...</option>
+                  {pairAccountsList.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+                {accountsData && pairAccountsList.length === 0 && (
+                  <p className="mt-1 text-xs text-gray-500">
+                    No other accounts available to pair with.
+                  </p>
+                )}
+              </div>
+
+              {pairAccountId && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Paired Transaction
+                  </label>
+                  <select
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    value={txPairId ?? ""}
+                    onChange={(e) =>
+                      setTxPairId(
+                        e.target.value ? Number(e.target.value) : null
+                      )
+                    }
+                  >
+                    <option value="">Select transaction...</option>
+                    {transactionsList.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.bankDescription} — {formatAmount(t.amount)} —{" "}
+                        {new Date(t.date).toLocaleDateString()}
+                      </option>
+                    ))}
+                  </select>
+                  {txData && transactionsList.length === 0 && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      No transactions in this account to pair with.
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           )}

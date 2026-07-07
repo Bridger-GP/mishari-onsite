@@ -27,6 +27,13 @@ export const transactions = async (
           payee: true,
           categorization: { include: { qbCategory: true } },
           txPair: true,
+          corrections: {
+            include: {
+              payee: true,
+              categorization: { include: { qbCategory: true } },
+              txPair: true,
+            },
+          },
         },
       },
     },
@@ -39,10 +46,19 @@ export const transactions = async (
     activeLabel: tx.labels[0]
       ? {
           ...tx.labels[0],
+          isCorrection: tx.labels[0].corrections.length > 0,
           categorization: tx.labels[0].categorization.map((cl) => ({
             ...cl,
             category: cl.qbCategory,
           })),
+          incorrectLabel: tx.labels[0].corrections[0]
+            ? {
+                ...tx.labels[0].corrections[0],
+                categorization: tx.labels[0].corrections[0].categorization.map(
+                  (cl) => ({ ...cl, category: cl.qbCategory })
+                ),
+              }
+            : null,
         }
       : null,
   }));
@@ -149,6 +165,7 @@ export const correctLabel = async (
 
     return {
       ...newLabel,
+      isCorrection: true,
       categorization: newLabel.categorization.map((cl) => ({
         ...cl,
         category: cl.qbCategory,
