@@ -45,9 +45,10 @@ model Transaction {
   clientId        Int
   qbId            String
 
-  account Account            @relation(fields: [accountId], references: [id])
-  client  Client             @relation(fields: [clientId], references: [id])
-  labels  TransactionLabel[]
+  account      Account            @relation(fields: [accountId], references: [id])
+  client       Client             @relation(fields: [clientId], references: [id])
+  labels       TransactionLabel[] @relation("LabelTransaction")
+  pairedLabels TransactionLabel[] @relation("LabelPair")
 
   @@unique([qbId, clientId])
 }
@@ -55,13 +56,15 @@ model Transaction {
 model TransactionLabel {
   id               Int     @id @default(autoincrement())
   payeeId          Int?
+  transactionId    Int
   txPairId         Int?
   isCorrect        Boolean?
   incorrectReason  String?
   correctedLabelId Int?
 
   payee          QbPayee?           @relation(fields: [payeeId], references: [id])
-  txPair         Transaction?       @relation(fields: [txPairId], references: [id])
+  transaction    Transaction        @relation("LabelTransaction", fields: [transactionId], references: [id])
+  txPair         Transaction?       @relation("LabelPair", fields: [txPairId], references: [id])
   categorization CategoryLabel[]
   correctedLabel TransactionLabel?  @relation("LabelCorrection", fields: [correctedLabelId], references: [id])
   corrections    TransactionLabel[] @relation("LabelCorrection")

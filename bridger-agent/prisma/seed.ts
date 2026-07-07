@@ -6,14 +6,13 @@ const prisma = new PrismaClient();
  * Amounts are stored as integer cents. Money leaving an account is negative
  * (expenses, bill payments); money arriving is positive (deposits, refunds).
  *
- * A TransactionLabel applies to the bank Transaction referenced by `txPair`:
- * for a normally-categorized transaction that is the transaction itself; for a
- * matched pair (a bill and the payment that settles it) the payment's label
- * points `txPair` at the bill it pays. A payment-side label carries no payee —
- * the vendor and expense were already booked on the bill, so the payment only
- * matches the bill and clears Accounts Payable. Every label here has
- * `isCorrect = null` (not yet reviewed for correctness), so `incorrectReason`
- * and `correctedLabel` stay null as well.
+ * A TransactionLabel is about the bank Transaction referenced by `transaction`
+ * (`transactionId`). When that transaction is part of a matched pair — a bill
+ * and the payment that settles it — `txPair` points at the other transaction in
+ * the pair. The payment-side label carries no payee: the vendor and expense were
+ * already booked on the bill, so the payment only matches the bill and clears
+ * Accounts Payable. Every label here has `isCorrect = null` (not yet reviewed
+ * for correctness), so `incorrectReason` and `correctedLabel` stay null as well.
  */
 
 async function reset() {
@@ -110,7 +109,7 @@ async function main() {
   await prisma.transactionLabel.create({
     data: {
       payeeId: acme.payees.staples,
-      txPairId: acmeSupplies.id,
+      transactionId: acmeSupplies.id,
       isCorrect: null,
       categorization: {
         create: [{ qbCategoryId: acme.categories.supplies, amount: -12500 }],
@@ -133,7 +132,7 @@ async function main() {
   await prisma.transactionLabel.create({
     data: {
       payeeId: acme.payees.cornerbakery, // labeled against the new (no-qbId) payee
-      txPairId: acmeCostco.id,
+      transactionId: acmeCostco.id,
       isCorrect: null,
       categorization: {
         create: [
@@ -168,8 +167,9 @@ async function main() {
     ],
   });
 
-  // The bill: the expense is booked here, against the vendor payee and the
-  // Contractor Expense category.
+  // The two bank transactions that form the matched pair: the bill and the
+  // payment that settles it. Both are created first so each label can reference
+  // the other transaction via `txPair`.
   const brBill = await prisma.transaction.create({
     data: {
       amount: -450000,
@@ -180,21 +180,6 @@ async function main() {
       qbId: "QB-TXN-BR-BILL",
     },
   });
-  await prisma.transactionLabel.create({
-    data: {
-      payeeId: blueRidge.payees.acmedesign,
-      txPairId: brBill.id,
-      isCorrect: null,
-      categorization: {
-        create: [{ qbCategoryId: blueRidge.categories.contractors, amount: -450000 }],
-      },
-    },
-  });
-
-  // The payment: a separate bank transaction that settles the bill above. It is
-  // purely a match, not a fresh expense — the vendor and category were already
-  // booked on the bill — so its label has no payee and clears Accounts Payable.
-  // The label points `txPair` at the bill, forming the matched pair.
   const brPayment = await prisma.transaction.create({
     data: {
       amount: -450000,
@@ -205,10 +190,29 @@ async function main() {
       qbId: "QB-TXN-BR-PAYMENT",
     },
   });
+
+  // The bill's label: about the bill, paired with the payment. The expense is
+  // booked here, against the vendor payee and the Contractor Expense category.
+  await prisma.transactionLabel.create({
+    data: {
+      payeeId: blueRidge.payees.acmedesign,
+      transactionId: brBill.id,
+      txPairId: brPayment.id,
+      isCorrect: null,
+      categorization: {
+        create: [{ qbCategoryId: blueRidge.categories.contractors, amount: -450000 }],
+      },
+    },
+  });
+
+  // The payment's label: about the payment, paired with the bill. It is purely a
+  // match, not a fresh expense — the vendor and category were already booked on
+  // the bill — so it has no payee and clears Accounts Payable.
   await prisma.transactionLabel.create({
     data: {
       payeeId: null, // no payee: the payment only matches/clears the bill
-      txPairId: brBill.id, // matched to the bill it pays
+      transactionId: brPayment.id,
+      txPairId: brBill.id,
       isCorrect: null,
       categorization: {
         create: [{ qbCategoryId: blueRidge.categories.ap, amount: -450000 }],
@@ -230,7 +234,7 @@ async function main() {
   await prisma.transactionLabel.create({
     data: {
       payeeId: blueRidge.payees.aws,
-      txPairId: brAws.id,
+      transactionId: brAws.id,
       isCorrect: null,
       categorization: {
         create: [{ qbCategoryId: blueRidge.categories.software, amount: -8200 }],
@@ -279,7 +283,7 @@ async function main() {
   await prisma.transactionLabel.create({
     data: {
       payeeId: copperline.payees.homedepot,
-      txPairId: clSupply.id,
+      transactionId: clSupply.id,
       isCorrect: null,
       categorization: {
         create: [
@@ -305,7 +309,7 @@ async function main() {
   await prisma.transactionLabel.create({
     data: {
       payeeId: copperline.payees.citypermits,
-      txPairId: clPermit.id,
+      transactionId: clPermit.id,
       isCorrect: null,
       categorization: {
         create: [{ qbCategoryId: copperline.categories.permits, amount: -9000 }],
@@ -327,7 +331,7 @@ async function main() {
   await prisma.transactionLabel.create({
     data: {
       payeeId: copperline.payees.sunbelt,
-      txPairId: clFuel.id,
+      transactionId: clFuel.id,
       isCorrect: null,
       categorization: {
         create: [{ qbCategoryId: copperline.categories.fuel, amount: -14500 }],
