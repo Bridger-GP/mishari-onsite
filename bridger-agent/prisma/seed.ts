@@ -7,12 +7,13 @@ const prisma = new PrismaClient();
  * (expenses, bill payments); money arriving is positive (deposits, refunds).
  *
  * A TransactionLabel is about the bank Transaction referenced by `transaction`
- * (`transactionId`). When that transaction is part of a matched pair — a bill
- * and the payment that settles it — `txPair` points at the other transaction in
- * the pair. The payment-side label carries no payee: the vendor and expense were
- * already booked on the bill, so the payment only matches the bill and clears
- * Accounts Payable. Every label here has `isCorrect = null` (not yet reviewed
- * for correctness), so `incorrectReason` and `correctedLabel` stay null as well.
+ * (`transactionId`). When that transaction is part of a matched pair — two
+ * transactions that offset each other, such as a transfer between the client's
+ * own accounts — `txPair` points at the other transaction in the pair. A paired
+ * label has no payee and no category: the pair nets to zero, so it books nothing
+ * to the P&L and only records the match. Every label here has `isCorrect = null`
+ * (not yet reviewed for correctness), so `incorrectReason` and `correctedLabel`
+ * stay null as well.
  */
 
 async function reset() {
@@ -144,8 +145,9 @@ async function main() {
   });
 
   // ---------------------------------------------------------------------------
-  // Client 2 — 3 accounts. Showcases a matched pair: an accounts-payable bill
-  // and the bank payment that settles it, linked via the payment label's
+  // Client 2 — 3 accounts. Showcases a matched pair: a transfer between the
+  // client's own accounts. The two transactions offset each other, so a paired
+  // label has no payee and no category — it only links to the other side via
   // `txPair`.
   // ---------------------------------------------------------------------------
   const blueRidge = await createClient({
@@ -157,7 +159,6 @@ async function main() {
       { name: "Amex Corporate", qbId: "QB-ACCT-BR-AMEX" },
     ],
     categories: [
-      { key: "ap", name: "Accounts Payable", qbId: "QB-CAT-BR-AP" },
       { key: "software", name: "Software Subscriptions", qbId: "QB-CAT-BR-SW" },
       { key: "contractors", name: "Contractor Expense", qbId: "QB-CAT-BR-CONTRACT" },
     ],
@@ -167,56 +168,46 @@ async function main() {
     ],
   });
 
-  // The two bank transactions that form the matched pair: the bill and the
-  // payment that settles it. Both are created first so each label can reference
-  // the other transaction via `txPair`.
-  const brBill = await prisma.transaction.create({
+  // The two bank transactions that form the matched pair: money leaving the
+  // operating account and the same amount arriving in payroll. Both are created
+  // first so each label can reference the other transaction via `txPair`.
+  const brTransferOut = await prisma.transaction.create({
     data: {
-      amount: -450000,
+      amount: -200000,
       date: new Date("2026-06-10"),
-      bankDescription: "BILL - ACME DESIGN STUDIO INV #907",
+      bankDescription: "TRANSFER TO PAYROLL ACCT",
       accountId: blueRidge.accounts[0].id,
       clientId: blueRidge.client.id,
-      qbId: "QB-TXN-BR-BILL",
+      qbId: "QB-TXN-BR-XFER-OUT",
     },
   });
-  const brPayment = await prisma.transaction.create({
+  const brTransferIn = await prisma.transaction.create({
     data: {
-      amount: -450000,
-      date: new Date("2026-06-24"),
-      bankDescription: "ACH PAYMENT ACME DESIGN STUDIO",
-      accountId: blueRidge.accounts[0].id,
+      amount: 200000,
+      date: new Date("2026-06-10"),
+      bankDescription: "TRANSFER FROM OPERATING ACCT",
+      accountId: blueRidge.accounts[1].id,
       clientId: blueRidge.client.id,
-      qbId: "QB-TXN-BR-PAYMENT",
+      qbId: "QB-TXN-BR-XFER-IN",
     },
   });
 
-  // The bill's label: about the bill, paired with the payment. The expense is
-  // booked here, against the vendor payee and the Contractor Expense category.
+  // Each side's label: about its own transaction, paired with the other. A pair
+  // is a self-offsetting transfer, so neither label has a payee or a category.
   await prisma.transactionLabel.create({
     data: {
-      payeeId: blueRidge.payees.acmedesign,
-      transactionId: brBill.id,
-      txPairId: brPayment.id,
+      payeeId: null,
+      transactionId: brTransferOut.id,
+      txPairId: brTransferIn.id,
       isCorrect: null,
-      categorization: {
-        create: [{ qbCategoryId: blueRidge.categories.contractors, amount: -450000 }],
-      },
     },
   });
-
-  // The payment's label: about the payment, paired with the bill. It is purely a
-  // match, not a fresh expense — the vendor and category were already booked on
-  // the bill — so it has no payee and clears Accounts Payable.
   await prisma.transactionLabel.create({
     data: {
-      payeeId: null, // no payee: the payment only matches/clears the bill
-      transactionId: brPayment.id,
-      txPairId: brBill.id,
+      payeeId: null,
+      transactionId: brTransferIn.id,
+      txPairId: brTransferOut.id,
       isCorrect: null,
-      categorization: {
-        create: [{ qbCategoryId: blueRidge.categories.ap, amount: -450000 }],
-      },
     },
   });
 
