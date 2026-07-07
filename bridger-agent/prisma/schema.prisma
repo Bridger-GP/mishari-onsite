@@ -20,6 +20,8 @@ model Client {
   accounts     Account[]
   categories   QbCategory[]
   payees       QbPayee[]
+
+  @@unique([qbId])
 }
 
 model Account {
@@ -30,6 +32,8 @@ model Account {
 
   client       Client        @relation(fields: [clientId], references: [id])
   transactions Transaction[]
+
+  @@unique([qbId, clientId])
 }
 
 model Transaction {
@@ -44,6 +48,8 @@ model Transaction {
   account Account            @relation(fields: [accountId], references: [id])
   client  Client             @relation(fields: [clientId], references: [id])
   labels  TransactionLabel[]
+
+  @@unique([qbId, clientId])
 }
 
 model TransactionLabel {
@@ -80,6 +86,8 @@ model QbCategory {
 
   client         Client          @relation(fields: [clientId], references: [id])
   categoryLabels CategoryLabel[]
+
+  @@unique([qbId, clientId])
 }
 
 model QbPayee {
@@ -90,4 +98,6 @@ model QbPayee {
 
   client            Client             @relation(fields: [clientId], references: [id])
   transactionLabels TransactionLabel[]
+
+  @@unique([qbId, clientId])
 }
