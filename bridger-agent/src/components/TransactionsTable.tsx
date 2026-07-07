@@ -110,7 +110,10 @@ export function TransactionsTable({ clientId, accountId }: Props) {
   const [selectedTxIds, setSelectedTxIds] = useState<Set<number>>(new Set());
   const [correctingTx, setCorrectingTx] = useState<Transaction | null>(null);
 
-  const transactions: Transaction[] = data?.transactions ?? [];
+  const transactions: Transaction[] = useMemo(
+    () => data?.transactions ?? [],
+    [data?.transactions]
+  );
 
   const approvableTxs = useMemo(
     () =>
@@ -319,6 +322,8 @@ export function TransactionsTable({ clientId, accountId }: Props) {
           currentLabel={correctingTx.activeLabel}
           clientId={clientId}
           transactionId={correctingTx.id}
+          transactionAccountId={correctingTx.account.id}
+          transactionAmount={correctingTx.amount}
           onClose={() => setCorrectingTx(null)}
           onCorrected={handleCorrected}
         />

@@ -93,7 +93,33 @@ export const correctLabel = async (
   return prisma.$transaction(async (tx) => {
     const oldLabel = await tx.transactionLabel.findUniqueOrThrow({
       where: { id: labelId },
+      include: {
+        transaction: { select: { amount: true, accountId: true, clientId: true } },
+      },
     });
+
+    if (txPairId != null) {
+      const pair = await tx.transaction.findUniqueOrThrow({
+        where: { id: txPairId },
+        select: { accountId: true, clientId: true },
+      });
+      if (pair.clientId !== oldLabel.transaction.clientId) {
+        throw new Error("Paired transaction must belong to the same client");
+      }
+      if (pair.accountId === oldLabel.transaction.accountId) {
+        throw new Error("Paired transaction must be in a different account");
+      }
+    }
+
+    if (cats && cats.length > 0) {
+      const categorySum = cats.reduce((sum, c) => sum + c.amount, 0);
+      const txAmount = Math.abs(oldLabel.transaction.amount);
+      if (categorySum !== txAmount) {
+        throw new Error(
+          `Category amounts must sum to the transaction total (${txAmount}), but got ${categorySum}`
+        );
+      }
+    }
 
     const newLabel = await tx.transactionLabel.create({
       data: {

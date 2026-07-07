@@ -28,6 +28,9 @@ const TRANSACTIONS_FOR_PAIR_QUERY = gql`
       bankDescription
       amount
       date
+      account {
+        id
+      }
     }
   }
 `;
@@ -67,6 +70,8 @@ interface Props {
   currentLabel: ActiveLabel;
   clientId: number;
   transactionId: number;
+  transactionAccountId: number;
+  transactionAmount: number;
   onClose: () => void;
   onCorrected: () => void;
 }
@@ -81,6 +86,8 @@ export function CorrectionModal({
   currentLabel,
   clientId,
   transactionId,
+  transactionAccountId,
+  transactionAmount,
   onClose,
   onCorrected,
 }: Props) {
@@ -92,6 +99,7 @@ export function CorrectionModal({
     { qbCategoryId: null, amount: "" },
   ]);
   const [txPairId, setTxPairId] = useState<number | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const { data: payeesData } = useQuery(PAYEES_QUERY, {
     variables: { clientId },
@@ -117,9 +125,22 @@ export function CorrectionModal({
     bankDescription: string;
     amount: number;
     date: string;
+    account: { id: number };
   }> = (txData?.transactions ?? []).filter(
-    (t: { id: number }) => t.id !== transactionId
+    (t: { id: number; account: { id: number } }) =>
+      t.id !== transactionId && t.account.id !== transactionAccountId
   );
+
+  const validCategories = categoryRows.filter(
+    (r) => r.qbCategoryId != null && r.amount
+  );
+  const categorySum = validCategories.reduce(
+    (sum, r) => sum + Math.round(parseFloat(r.amount) * 100),
+    0
+  );
+  const hasSumMismatch =
+    validCategories.length > 0 &&
+    categorySum !== Math.abs(transactionAmount);
 
   const addCategoryRow = () => {
     setCategoryRows([...categoryRows, { qbCategoryId: null, amount: "" }]);
@@ -142,6 +163,10 @@ export function CorrectionModal({
   };
 
   const handleSubmit = async () => {
+    setSubmitError(null);
+
+    let variables: Record<string, unknown>;
+
     if (type === "standard") {
       if (!payeeId) return;
       const validCategories = categoryRows
@@ -151,18 +176,43 @@ export function CorrectionModal({
           amount: Math.round(parseFloat(r.amount) * 100),
         }));
 
-      await correctLabelMutation({
-        variables: {
-          labelId,
-          payeeId,
-          categories: validCategories.length > 0 ? validCategories : null,
-        },
-      });
+      if (validCategories.length > 0) {
+        const sum = validCategories.reduce((s, c) => s + c.amount, 0);
+        if (sum !== Math.abs(transactionAmount)) {
+          setSubmitError(
+            `Category amounts must sum to ${formatAmount(Math.abs(transactionAmount))}, but currently total ${formatAmount(sum)}.`
+          );
+          return;
+        }
+      }
+
+      variables = {
+        labelId,
+        payeeId,
+        categories: validCategories.length > 0 ? validCategories : null,
+      };
     } else {
       if (!txPairId) return;
-      await correctLabelMutation({
-        variables: { labelId, txPairId },
+      variables = { labelId, txPairId };
+    }
+
+    try {
+      const { errors } = await correctLabelMutation({
+        variables,
+        errorPolicy: "all",
       });
+
+      if (errors && errors.length > 0) {
+        setSubmitError(errors[0].message);
+        return;
+      }
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error
+          ? err.message
+          : "Something went wrong. Please try again."
+      );
+      return;
     }
 
     onCorrected();
@@ -330,6 +380,37 @@ export function CorrectionModal({
                 >
                   + Add category
                 </button>
+                {hasSumMismatch && (
+                  <div className="mt-3 flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <svg
+                      className="w-5 h-5 text-red-500 shrink-0 mt-0.5"
+                      fill="currentColor"
+                      viewBox="0 0 20 20"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                    <div className="text-sm">
+                      <p className="font-medium text-red-800">
+                        Amounts don&apos;t add up
+                      </p>
+                      <p className="text-red-700 mt-0.5">
+                        Category amounts must sum to{" "}
+                        <span className="font-semibold">
+                          {formatAmount(Math.abs(transactionAmount))}
+                        </span>
+                        . Current total:{" "}
+                        <span className="font-semibold">
+                          {formatAmount(categorySum)}
+                        </span>
+                        .
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
             </>
           ) : (
@@ -355,28 +436,52 @@ export function CorrectionModal({
                   </option>
                 ))}
               </select>
+              {txData && transactionsList.length === 0 && (
+                <p className="mt-1 text-xs text-gray-500">
+                  No transactions available in other accounts to pair with.
+                </p>
+              )}
             </div>
           )}
         </div>
 
-        <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={
-              loading ||
-              (type === "standard" && !payeeId) ||
-              (type === "pair" && !txPairId)
-            }
-            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loading ? "Submitting..." : "Submit Correction"}
-          </button>
+        <div className="px-6 py-4 border-t border-gray-200 space-y-3">
+          {submitError && (
+            <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+              <svg
+                className="w-5 h-5 text-red-500 shrink-0 mt-0.5"
+                fill="currentColor"
+                viewBox="0 0 20 20"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z"
+                  clipRule="evenodd"
+                />
+              </svg>
+              <p className="text-sm text-red-700">{submitError}</p>
+            </div>
+          )}
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={
+                loading ||
+                (type === "standard" && !payeeId) ||
+                (type === "standard" && hasSumMismatch) ||
+                (type === "pair" && !txPairId)
+              }
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading ? "Submitting..." : "Submit Correction"}
+            </button>
+          </div>
         </div>
       </div>
     </div>
