@@ -54,14 +54,14 @@ model Transaction {
 
 model TransactionLabel {
   id               Int     @id @default(autoincrement())
-  payeeId          Int
-  txPaidId         Int?
+  payeeId          Int?
+  txPairId         Int?
   isCorrect        Boolean?
   incorrectReason  String?
   correctedLabelId Int?
 
-  payee          QbPayee            @relation(fields: [payeeId], references: [id])
-  txPaid         Transaction?       @relation(fields: [txPaidId], references: [id])
+  payee          QbPayee?           @relation(fields: [payeeId], references: [id])
+  txPair         Transaction?       @relation(fields: [txPairId], references: [id])
   categorization CategoryLabel[]
   correctedLabel TransactionLabel?  @relation("LabelCorrection", fields: [correctedLabelId], references: [id])
   corrections    TransactionLabel[] @relation("LabelCorrection")

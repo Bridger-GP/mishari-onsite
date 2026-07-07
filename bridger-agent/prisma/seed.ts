@@ -1,0 +1,365 @@
+import { PrismaClient } from "@prisma/client";
+
+const prisma = new PrismaClient();
+
+/**
+ * Amounts are stored as integer cents. Money leaving an account is negative
+ * (expenses, bill payments); money arriving is positive (deposits, refunds).
+ *
+ * A TransactionLabel applies to the bank Transaction referenced by `txPair`:
+ * for a normally-categorized transaction that is the transaction itself; for a
+ * matched pair (a bill and the payment that settles it) the payment's label
+ * points `txPair` at the bill it pays. A payment-side label carries no payee —
+ * the vendor and expense were already booked on the bill, so the payment only
+ * matches the bill and clears Accounts Payable. Every label here has
+ * `isCorrect = null` (not yet reviewed for correctness), so `incorrectReason`
+ * and `correctedLabel` stay null as well.
+ */
+
+async function reset() {
+  // Delete children before parents to satisfy foreign-key constraints.
+  await prisma.categoryLabel.deleteMany();
+  await prisma.transactionLabel.deleteMany();
+  await prisma.transaction.deleteMany();
+  await prisma.qbPayee.deleteMany();
+  await prisma.qbCategory.deleteMany();
+  await prisma.account.deleteMany();
+  await prisma.client.deleteMany();
+}
+
+type CategorySpec = { key: string; name: string; qbId: string };
+type PayeeSpec = { key: string; name: string; qbId: string | null };
+
+async function createClient(spec: {
+  name: string;
+  qbId: string;
+  accounts: { name: string; qbId: string }[];
+  categories: CategorySpec[];
+  payees: PayeeSpec[];
+}) {
+  const client = await prisma.client.create({
+    data: { name: spec.name, qbId: spec.qbId },
+  });
+
+  const accounts = await Promise.all(
+    spec.accounts.map((a) =>
+      prisma.account.create({
+        data: { name: a.name, qbId: a.qbId, clientId: client.id },
+      })
+    )
+  );
+
+  const categories: Record<string, number> = {};
+  for (const c of spec.categories) {
+    const created = await prisma.qbCategory.create({
+      data: { name: c.name, qbId: c.qbId, clientId: client.id },
+    });
+    categories[c.key] = created.id;
+  }
+
+  const payees: Record<string, number> = {};
+  for (const p of spec.payees) {
+    const created = await prisma.qbPayee.create({
+      data: { name: p.name, qbId: p.qbId, clientId: client.id },
+    });
+    payees[p.key] = created.id;
+  }
+
+  return { client, accounts, categories, payees };
+}
+
+async function main() {
+  await reset();
+
+  // ---------------------------------------------------------------------------
+  // Client 1 — 2 accounts. Showcases a simple single-category label and a split
+  // label (one transaction categorized across multiple categories), plus a
+  // brand-new payee that has no QuickBooks id yet.
+  // ---------------------------------------------------------------------------
+  const acme = await createClient({
+    name: "Acme Coffee Roasters",
+    qbId: "QB-CLIENT-ACME",
+    accounts: [
+      { name: "Business Checking", qbId: "QB-ACCT-ACME-CHK" },
+      { name: "Business Credit Card", qbId: "QB-ACCT-ACME-CC" },
+    ],
+    categories: [
+      { key: "supplies", name: "Office Supplies", qbId: "QB-CAT-ACME-SUP" },
+      { key: "cogs", name: "Cost of Goods Sold", qbId: "QB-CAT-ACME-COGS" },
+      { key: "meals", name: "Meals & Entertainment", qbId: "QB-CAT-ACME-MEALS" },
+    ],
+    payees: [
+      { key: "staples", name: "Staples", qbId: "QB-PAYEE-ACME-STAPLES" },
+      { key: "greenmtn", name: "Green Mountain Beans", qbId: "QB-PAYEE-ACME-GMB" },
+      // New payee: created locally, not yet synced to QuickBooks (no qbId).
+      { key: "cornerbakery", name: "Corner Bakery", qbId: null },
+    ],
+  });
+
+  // Simple label: one transaction, one category.
+  const acmeSupplies = await prisma.transaction.create({
+    data: {
+      amount: -12500,
+      date: new Date("2026-06-03"),
+      bankDescription: "STAPLES #1234 PURCHASE",
+      accountId: acme.accounts[1].id,
+      clientId: acme.client.id,
+      qbId: "QB-TXN-ACME-1",
+    },
+  });
+  await prisma.transactionLabel.create({
+    data: {
+      payeeId: acme.payees.staples,
+      txPairId: acmeSupplies.id,
+      isCorrect: null,
+      categorization: {
+        create: [{ qbCategoryId: acme.categories.supplies, amount: -12500 }],
+      },
+    },
+  });
+
+  // Split label: a single Costco run split across two categories. The category
+  // label amounts sum to the transaction amount.
+  const acmeCostco = await prisma.transaction.create({
+    data: {
+      amount: -30000,
+      date: new Date("2026-06-05"),
+      bankDescription: "COSTCO WHOLESALE #55",
+      accountId: acme.accounts[0].id,
+      clientId: acme.client.id,
+      qbId: "QB-TXN-ACME-2",
+    },
+  });
+  await prisma.transactionLabel.create({
+    data: {
+      payeeId: acme.payees.cornerbakery, // labeled against the new (no-qbId) payee
+      txPairId: acmeCostco.id,
+      isCorrect: null,
+      categorization: {
+        create: [
+          { qbCategoryId: acme.categories.cogs, amount: -20000 },
+          { qbCategoryId: acme.categories.supplies, amount: -10000 },
+        ],
+      },
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // Client 2 — 3 accounts. Showcases a matched pair: an accounts-payable bill
+  // and the bank payment that settles it, linked via the payment label's
+  // `txPair`.
+  // ---------------------------------------------------------------------------
+  const blueRidge = await createClient({
+    name: "Blue Ridge Consulting",
+    qbId: "QB-CLIENT-BLUERIDGE",
+    accounts: [
+      { name: "Operating Checking", qbId: "QB-ACCT-BR-CHK" },
+      { name: "Payroll Checking", qbId: "QB-ACCT-BR-PAY" },
+      { name: "Amex Corporate", qbId: "QB-ACCT-BR-AMEX" },
+    ],
+    categories: [
+      { key: "ap", name: "Accounts Payable", qbId: "QB-CAT-BR-AP" },
+      { key: "software", name: "Software Subscriptions", qbId: "QB-CAT-BR-SW" },
+      { key: "contractors", name: "Contractor Expense", qbId: "QB-CAT-BR-CONTRACT" },
+    ],
+    payees: [
+      { key: "aws", name: "Amazon Web Services", qbId: "QB-PAYEE-BR-AWS" },
+      { key: "acmedesign", name: "Acme Design Studio", qbId: "QB-PAYEE-BR-DESIGN" },
+    ],
+  });
+
+  // The bill: the expense is booked here, against the vendor payee and the
+  // Contractor Expense category.
+  const brBill = await prisma.transaction.create({
+    data: {
+      amount: -450000,
+      date: new Date("2026-06-10"),
+      bankDescription: "BILL - ACME DESIGN STUDIO INV #907",
+      accountId: blueRidge.accounts[0].id,
+      clientId: blueRidge.client.id,
+      qbId: "QB-TXN-BR-BILL",
+    },
+  });
+  await prisma.transactionLabel.create({
+    data: {
+      payeeId: blueRidge.payees.acmedesign,
+      txPairId: brBill.id,
+      isCorrect: null,
+      categorization: {
+        create: [{ qbCategoryId: blueRidge.categories.contractors, amount: -450000 }],
+      },
+    },
+  });
+
+  // The payment: a separate bank transaction that settles the bill above. It is
+  // purely a match, not a fresh expense — the vendor and category were already
+  // booked on the bill — so its label has no payee and clears Accounts Payable.
+  // The label points `txPair` at the bill, forming the matched pair.
+  const brPayment = await prisma.transaction.create({
+    data: {
+      amount: -450000,
+      date: new Date("2026-06-24"),
+      bankDescription: "ACH PAYMENT ACME DESIGN STUDIO",
+      accountId: blueRidge.accounts[0].id,
+      clientId: blueRidge.client.id,
+      qbId: "QB-TXN-BR-PAYMENT",
+    },
+  });
+  await prisma.transactionLabel.create({
+    data: {
+      payeeId: null, // no payee: the payment only matches/clears the bill
+      txPairId: brBill.id, // matched to the bill it pays
+      isCorrect: null,
+      categorization: {
+        create: [{ qbCategoryId: blueRidge.categories.ap, amount: -450000 }],
+      },
+    },
+  });
+
+  // A plain software-subscription charge on the Amex.
+  const brAws = await prisma.transaction.create({
+    data: {
+      amount: -8200,
+      date: new Date("2026-06-15"),
+      bankDescription: "AWS EMEA BILLING",
+      accountId: blueRidge.accounts[2].id,
+      clientId: blueRidge.client.id,
+      qbId: "QB-TXN-BR-AWS",
+    },
+  });
+  await prisma.transactionLabel.create({
+    data: {
+      payeeId: blueRidge.payees.aws,
+      txPairId: brAws.id,
+      isCorrect: null,
+      categorization: {
+        create: [{ qbCategoryId: blueRidge.categories.software, amount: -8200 }],
+      },
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // Client 3 — 4 accounts. Showcases a three-way split and a second new payee
+  // that has no QuickBooks id.
+  // ---------------------------------------------------------------------------
+  const copperline = await createClient({
+    name: "Copperline Construction",
+    qbId: "QB-CLIENT-COPPERLINE",
+    accounts: [
+      { name: "Main Checking", qbId: "QB-ACCT-CL-CHK" },
+      { name: "Equipment Loan", qbId: "QB-ACCT-CL-LOAN" },
+      { name: "Fuel Card", qbId: "QB-ACCT-CL-FUEL" },
+      { name: "Money Market", qbId: "QB-ACCT-CL-MM" },
+    ],
+    categories: [
+      { key: "materials", name: "Job Materials", qbId: "QB-CAT-CL-MAT" },
+      { key: "fuel", name: "Fuel", qbId: "QB-CAT-CL-FUEL" },
+      { key: "equipment", name: "Equipment Rental", qbId: "QB-CAT-CL-EQUIP" },
+      { key: "permits", name: "Permits & Fees", qbId: "QB-CAT-CL-PERMIT" },
+    ],
+    payees: [
+      { key: "homedepot", name: "Home Depot", qbId: "QB-PAYEE-CL-HD" },
+      { key: "sunbelt", name: "Sunbelt Rentals", qbId: "QB-PAYEE-CL-SUN" },
+      // Second new payee with no QuickBooks id.
+      { key: "citypermits", name: "City Permit Office", qbId: null },
+    ],
+  });
+
+  // Three-way split: a big-box run covering materials, equipment, and permits.
+  const clSupply = await prisma.transaction.create({
+    data: {
+      amount: -125000,
+      date: new Date("2026-06-18"),
+      bankDescription: "HOME DEPOT PRO #6620",
+      accountId: copperline.accounts[0].id,
+      clientId: copperline.client.id,
+      qbId: "QB-TXN-CL-1",
+    },
+  });
+  await prisma.transactionLabel.create({
+    data: {
+      payeeId: copperline.payees.homedepot,
+      txPairId: clSupply.id,
+      isCorrect: null,
+      categorization: {
+        create: [
+          { qbCategoryId: copperline.categories.materials, amount: -80000 },
+          { qbCategoryId: copperline.categories.equipment, amount: -30000 },
+          { qbCategoryId: copperline.categories.permits, amount: -15000 },
+        ],
+      },
+    },
+  });
+
+  // A permit fee labeled against the new (no-qbId) payee.
+  const clPermit = await prisma.transaction.create({
+    data: {
+      amount: -9000,
+      date: new Date("2026-06-20"),
+      bankDescription: "CITY OF DURHAM PERMIT FEE",
+      accountId: copperline.accounts[0].id,
+      clientId: copperline.client.id,
+      qbId: "QB-TXN-CL-2",
+    },
+  });
+  await prisma.transactionLabel.create({
+    data: {
+      payeeId: copperline.payees.citypermits,
+      txPairId: clPermit.id,
+      isCorrect: null,
+      categorization: {
+        create: [{ qbCategoryId: copperline.categories.permits, amount: -9000 }],
+      },
+    },
+  });
+
+  // A fuel-card charge.
+  const clFuel = await prisma.transaction.create({
+    data: {
+      amount: -14500,
+      date: new Date("2026-06-22"),
+      bankDescription: "SUNBELT EQUIP RENTAL",
+      accountId: copperline.accounts[2].id,
+      clientId: copperline.client.id,
+      qbId: "QB-TXN-CL-3",
+    },
+  });
+  await prisma.transactionLabel.create({
+    data: {
+      payeeId: copperline.payees.sunbelt,
+      txPairId: clFuel.id,
+      isCorrect: null,
+      categorization: {
+        create: [{ qbCategoryId: copperline.categories.fuel, amount: -14500 }],
+      },
+    },
+  });
+
+  const [clients, accounts, transactions, labels, categoryLabels, payees] =
+    await Promise.all([
+      prisma.client.count(),
+      prisma.account.count(),
+      prisma.transaction.count(),
+      prisma.transactionLabel.count(),
+      prisma.categoryLabel.count(),
+      prisma.qbPayee.count(),
+    ]);
+
+  console.log("Seed complete:");
+  console.log(`  clients:          ${clients}`);
+  console.log(`  accounts:         ${accounts}`);
+  console.log(`  transactions:     ${transactions}`);
+  console.log(`  transactionLabels:${labels}`);
+  console.log(`  categoryLabels:   ${categoryLabels}`);
+  console.log(`  payees:           ${payees} (${await prisma.qbPayee.count({ where: { qbId: null } })} without qbId)`);
+}
+
+main()
+  .then(async () => {
+    await prisma.$disconnect();
+  })
+  .catch(async (e) => {
+    console.error(e);
+    await prisma.$disconnect();
+    process.exit(1);
+  });
